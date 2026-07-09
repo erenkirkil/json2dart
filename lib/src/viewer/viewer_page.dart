@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -27,10 +28,15 @@ class ViewerPage extends StatefulWidget {
 class _ViewerPageState extends State<ViewerPage> with ActiveDocumentEditor {
   final TextEditingController _text = TextEditingController();
   final GlobalKey<JsonTreeViewState> _treeKey = GlobalKey<JsonTreeViewState>();
+  final TextEditingController _search = TextEditingController();
+  Timer? _searchDebounce;
 
   bool _showText = false;
   String? _selectedPath;
   dynamic _selectedValue;
+  String _searchQuery = '';
+  int _matchCount = 0;
+  int _matchIndex = -1;
 
   @override
   TextEditingController get editorController => _text;
@@ -44,7 +50,24 @@ class _ViewerPageState extends State<ViewerPage> with ActiveDocumentEditor {
   @override
   void dispose() {
     _text.dispose();
+    _search.dispose();
+    _searchDebounce?.cancel();
     super.dispose();
+  }
+
+  void _onSearchChanged(String value) {
+    // Temizle düğmesi gibi anlık UI durumunu hemen yenile.
+    setState(() {});
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 250), () {
+      if (mounted) setState(() => _searchQuery = value);
+    });
+  }
+
+  void _clearSearch() {
+    _searchDebounce?.cancel();
+    _search.clear();
+    setState(() => _searchQuery = '');
   }
 
   void _minify() {
@@ -65,9 +88,14 @@ class _ViewerPageState extends State<ViewerPage> with ActiveDocumentEditor {
           contentSyncListener(
             onSwitch: () {
               if (mounted) {
+                _searchDebounce?.cancel();
+                _search.clear();
                 setState(() {
                   _selectedPath = null;
                   _selectedValue = null;
+                  _searchQuery = '';
+                  _matchCount = 0;
+                  _matchIndex = -1;
                 });
               }
             },
@@ -186,6 +214,74 @@ class _ViewerPageState extends State<ViewerPage> with ActiveDocumentEditor {
     );
   }
 
+  Widget _buildSearchBar() {
+    final scheme = Theme.of(context).colorScheme;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: 160,
+          height: 30,
+          child: TextField(
+            controller: _search,
+            onChanged: _onSearchChanged,
+            onSubmitted: (_) => _treeKey.currentState?.nextMatch(),
+            style: const TextStyle(fontSize: 12.5),
+            decoration: InputDecoration(
+              isDense: true,
+              hintText: 'Ara...',
+              prefixIcon: const Icon(Icons.search, size: 16),
+              prefixIconConstraints: const BoxConstraints(
+                minWidth: 28,
+                minHeight: 28,
+              ),
+              suffixIcon: _search.text.isEmpty
+                  ? null
+                  : IconButton(
+                      icon: const Icon(Icons.close, size: 14),
+                      onPressed: _clearSearch,
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(
+                        minWidth: 28,
+                        minHeight: 28,
+                      ),
+                    ),
+              contentPadding: const EdgeInsets.symmetric(vertical: 4),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(6),
+              ),
+            ),
+          ),
+        ),
+        if (_searchQuery.isNotEmpty) ...[
+          const SizedBox(width: 6),
+          Text(
+            _matchCount == 0 ? '0/0' : '${_matchIndex + 1}/$_matchCount',
+            style: TextStyle(fontSize: 11.5, color: scheme.onSurfaceVariant),
+          ),
+          IconButton(
+            icon: const Icon(Icons.keyboard_arrow_up, size: 18),
+            tooltip: 'Önceki eşleşme',
+            onPressed: _matchCount == 0
+                ? null
+                : () => _treeKey.currentState?.previousMatch(),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
+          ),
+          IconButton(
+            icon: const Icon(Icons.keyboard_arrow_down, size: 18),
+            tooltip: 'Sonraki eşleşme',
+            onPressed: _matchCount == 0
+                ? null
+                : () => _treeKey.currentState?.nextMatch(),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
+          ),
+        ],
+      ],
+    );
+  }
+
   Widget _buildTreeTab(WorkspaceState state) {
     if (state.activeContent.trim().isEmpty || state.parsed == null) {
       return PaneCard(
@@ -210,14 +306,24 @@ class _ViewerPageState extends State<ViewerPage> with ActiveDocumentEditor {
           flex: 3,
           child: PaneCard(
             title: 'Ağaç',
+            actions: [_buildSearchBar()],
             child: JsonTreeView(
               key: _treeKey,
               root: state.parsed,
               revision: state.parseRevision,
+              searchQuery: _searchQuery,
               onSelect: (path, value) => setState(() {
                 _selectedPath = path;
                 _selectedValue = value;
               }),
+              onSearchResult: (total, current) {
+                if (!mounted) return;
+                if (total == _matchCount && current == _matchIndex) return;
+                setState(() {
+                  _matchCount = total;
+                  _matchIndex = current;
+                });
+              },
             ),
           ),
         ),

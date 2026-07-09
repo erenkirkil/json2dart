@@ -67,6 +67,8 @@ class JsonTreeView extends StatefulWidget {
     required this.root,
     required this.revision,
     this.onSelect,
+    this.searchQuery = '',
+    this.onSearchResult,
   });
 
   final dynamic root;
@@ -75,6 +77,12 @@ class JsonTreeView extends StatefulWidget {
   final int revision;
 
   final void Function(String path, dynamic value)? onSelect;
+
+  /// Anahtar veya değerlerde aranacak metin (boşsa arama kapalı).
+  final String searchQuery;
+
+  /// Arama sonucu her değiştiğinde (toplam eşleşme, güncel eşleşme indeksi).
+  final void Function(int total, int current)? onSearchResult;
 
   @override
   State<JsonTreeView> createState() => JsonTreeViewState();
@@ -85,10 +93,29 @@ class JsonTreeViewState extends State<JsonTreeView> {
 
   final Set<String> _expanded = <String>{r'$'};
   String? _selectedPath;
+  final ScrollController _scrollController = ScrollController();
+
+  /// Aramayla eşleşen düğümlerin yolu, belge sırasına göre.
+  List<String> _matches = <String>[];
+  int _currentMatch = -1;
 
   /// Düzleştirilmiş düğüm listesi önbelleği; yalnızca yapı (genişletme)
   /// değişince geçersizleştirilir. Seçim değişiminde yeniden hesaplanmaz.
   List<_FlatNode>? _cachedNodes;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.searchQuery.trim().isNotEmpty) {
+      _recomputeSearch();
+    }
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
 
   @override
   void didUpdateWidget(covariant JsonTreeView oldWidget) {
@@ -109,7 +136,117 @@ class JsonTreeViewState extends State<JsonTreeView> {
       }
       _selectedPath = null;
       _cachedNodes = null;
+      _recomputeSearch();
+      return;
     }
+    if (oldWidget.searchQuery != widget.searchQuery) {
+      _recomputeSearch();
+    }
+  }
+
+  /// Verilen sorguyla tüm ağacı tarar, eşleşen düğümlerin atalarını açar
+  /// ve eşleşme listesini/güncel eşleşmeyi günceller.
+  void _recomputeSearch() {
+    final query = widget.searchQuery.trim().toLowerCase();
+    final matches = <String>[];
+    if (query.isNotEmpty) {
+      final ancestorStack = <String>[];
+
+      bool valueMatches(dynamic value) {
+        if (value == null) return 'null'.contains(query);
+        if (value is Map || value is List) return false;
+        return value.toString().toLowerCase().contains(query);
+      }
+
+      void visit(dynamic value, String? label, String path) {
+        final labelMatch = label != null && label.toLowerCase().contains(query);
+        if (labelMatch || valueMatches(value)) {
+          matches.add(path);
+          _expanded.addAll(ancestorStack);
+        }
+        if (value is Map) {
+          ancestorStack.add(path);
+          value.forEach(
+            (k, v) => visit(
+              v,
+              k.toString(),
+              _childPath(path, k.toString(), isKey: true),
+            ),
+          );
+          ancestorStack.removeLast();
+        } else if (value is List) {
+          ancestorStack.add(path);
+          for (var i = 0; i < value.length; i++) {
+            visit(value[i], '[$i]', _childPath(path, i, isKey: false));
+          }
+          ancestorStack.removeLast();
+        }
+      }
+
+      visit(widget.root, null, r'$');
+    }
+
+    setState(() {
+      _matches = matches;
+      _currentMatch = matches.isEmpty ? -1 : 0;
+      _cachedNodes = null;
+    });
+    _notifySearchResult();
+    if (_currentMatch >= 0) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _scrollToCurrentMatch(),
+      );
+    }
+  }
+
+  // Bildirim, ata widget'ın hâlâ derleme aşamasında olabileceği
+  // durumlarda (ör. didUpdateWidget) setState çağrısını güvenli kılmak için
+  // her zaman bir sonraki kareye ertelenir.
+  void _notifySearchResult() {
+    final total = _matches.length;
+    final current = _currentMatch;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) widget.onSearchResult?.call(total, current);
+    });
+  }
+
+  void _scrollToCurrentMatch() {
+    if (_currentMatch < 0 || _currentMatch >= _matches.length) return;
+    if (!_scrollController.hasClients) return;
+    final targetPath = _matches[_currentMatch];
+    final nodes = _cachedNodes ??= _flatten();
+    final index = nodes.indexWhere((n) => n.path == targetPath);
+    if (index < 0) return;
+    final maxOffset = _scrollController.position.maxScrollExtent;
+    final offset = (index * 24.0).clamp(0.0, maxOffset);
+    _scrollController.animateTo(
+      offset,
+      duration: const Duration(milliseconds: 200),
+      curve: Curves.easeOut,
+    );
+  }
+
+  /// Bir sonraki eşleşmeye git (başa sarar).
+  void nextMatch() {
+    if (_matches.isEmpty) return;
+    setState(() => _currentMatch = (_currentMatch + 1) % _matches.length);
+    _notifySearchResult();
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _scrollToCurrentMatch(),
+    );
+  }
+
+  /// Bir önceki eşleşmeye git (sona sarar).
+  void previousMatch() {
+    if (_matches.isEmpty) return;
+    setState(
+      () => _currentMatch =
+          (_currentMatch - 1 + _matches.length) % _matches.length,
+    );
+    _notifySearchResult();
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _scrollToCurrentMatch(),
+    );
   }
 
   /// Tüm düğümleri aç (çok büyük JSON'larda üst sınırla).
@@ -199,25 +336,71 @@ class JsonTreeViewState extends State<JsonTreeView> {
     return colors.container;
   }
 
+  /// [text] içinde arama sorgusuyla eşleşen kısımları vurgular (büyük/küçük
+  /// harf duyarsız). Güncel eşleşme diğerlerinden farklı renkte gösterilir.
+  List<TextSpan> _highlighted(String text, TextStyle style, bool isCurrent) {
+    final query = widget.searchQuery.trim();
+    if (query.isEmpty) return [TextSpan(text: text, style: style)];
+
+    final lowerText = text.toLowerCase();
+    final lowerQuery = query.toLowerCase();
+    final spans = <TextSpan>[];
+    var start = 0;
+    while (true) {
+      final idx = lowerText.indexOf(lowerQuery, start);
+      if (idx < 0) {
+        spans.add(TextSpan(text: text.substring(start), style: style));
+        break;
+      }
+      if (idx > start) {
+        spans.add(TextSpan(text: text.substring(start, idx), style: style));
+      }
+      spans.add(
+        TextSpan(
+          text: text.substring(idx, idx + query.length),
+          style: style.copyWith(
+            backgroundColor: isCurrent
+                ? const Color(0xFFFFA726)
+                : const Color(0x80FFEB3B),
+            color: Colors.black,
+          ),
+        ),
+      );
+      start = idx + query.length;
+    }
+    return spans;
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colors = _TreeColors(theme.brightness);
     final nodes = _cachedNodes ??= _flatten();
+    final currentMatchPath =
+        _currentMatch >= 0 && _currentMatch < _matches.length
+        ? _matches[_currentMatch]
+        : null;
 
     return ListView.builder(
+      controller: _scrollController,
       itemExtent: 24,
       itemCount: nodes.length,
       padding: const EdgeInsets.symmetric(vertical: 4),
       itemBuilder: (context, index) {
         final node = nodes[index];
         final selected = node.path == _selectedPath;
+        final isCurrentMatch = node.path == currentMatchPath;
         return InkWell(
           onTap: () => node.isContainer ? _toggle(node) : _select(node),
           child: Container(
-            color: selected
-                ? theme.colorScheme.primary.withValues(alpha: 0.12)
-                : null,
+            decoration: BoxDecoration(
+              color: selected
+                  ? theme.colorScheme.primary.withValues(alpha: 0.12)
+                  : null,
+              border: isCurrentMatch
+                  ? Border.all(color: const Color(0xFFFFA726), width: 1.5)
+                  : null,
+            ),
             padding: EdgeInsets.only(left: 4.0 + node.depth * 18),
             child: Row(
               children: [
@@ -237,9 +420,10 @@ class JsonTreeViewState extends State<JsonTreeView> {
                       style: codeTextStyle.copyWith(fontSize: 12.5),
                       children: [
                         if (node.label != null) ...[
-                          TextSpan(
-                            text: node.label,
-                            style: TextStyle(color: colors.key),
+                          ..._highlighted(
+                            node.label!,
+                            TextStyle(color: colors.key),
+                            isCurrentMatch,
                           ),
                           const TextSpan(text: ' : '),
                         ] else
@@ -250,14 +434,15 @@ class JsonTreeViewState extends State<JsonTreeView> {
                               fontWeight: FontWeight.w600,
                             ),
                           ),
-                        TextSpan(
-                          text: jsonValuePreview(node.value),
-                          style: TextStyle(
+                        ..._highlighted(
+                          jsonValuePreview(node.value),
+                          TextStyle(
                             color: _valueColor(node.value, colors),
                             fontStyle: node.value == null
                                 ? FontStyle.italic
                                 : FontStyle.normal,
                           ),
+                          isCurrentMatch,
                         ),
                       ],
                     ),

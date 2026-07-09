@@ -3,8 +3,8 @@
   "configurations": [
     {
       "name": "json2dart-web",
-      "runtimeExecutable": "flutter",
-      "runtimeArgs": ["run", "-d", "web-server", "--web-port", "8123"],
+      "runtimeExecutable": "fvm",
+      "runtimeArgs": ["flutter", "run", "-d", "web-server", "--web-port", "8123"],
       "port": 8123
     }
   ]

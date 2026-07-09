@@ -25,6 +25,7 @@ class ConverterPage extends StatefulWidget {
 class _ConverterPageState extends State<ConverterPage>
     with ActiveDocumentEditor {
   final TextEditingController _input = TextEditingController();
+  final ScrollController _outputScroll = ScrollController();
 
   @override
   TextEditingController get editorController => _input;
@@ -38,6 +39,7 @@ class _ConverterPageState extends State<ConverterPage>
   @override
   void dispose() {
     _input.dispose();
+    _outputScroll.dispose();
     super.dispose();
   }
 
@@ -166,7 +168,9 @@ class _ConverterPageState extends State<ConverterPage>
                           ),
                         )
                       : Scrollbar(
+                          controller: _outputScroll,
                           child: SingleChildScrollView(
+                            controller: _outputScroll,
                             padding: const EdgeInsets.all(10),
                             child: SelectableText.rich(
                               TextSpan(

@@ -44,6 +44,9 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
+# Paketlenmiş dağıtım çıktıları (ör. DMG)
+/dist/
+
 # FVM (Flutter Version Management) — .fvmrc sürüm sabitini commit'le,
 # yerel SDK sembolik bağını ve önbelleğini yoksay.
 .fvm/
