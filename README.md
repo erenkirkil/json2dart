@@ -37,13 +37,13 @@ mobilde) çalışır.
 ## Sürüm yönetimi (FVM)
 
 Bu proje **FVM** ile belirli bir Flutter sürümüne sabitlenmiştir — `.fvmrc`:
-**Flutter 3.44.4 / Dart 3.12.2**. Böylece makinendeki global Flutter'a ve diğer
+**Flutter 3.44.6 / Dart 3.12.2**. Böylece makinendeki global Flutter'a ve diğer
 projelerine dokunmadan bu projede en güncel sürüm kullanılır. Komutları `flutter`
 yerine **`fvm flutter`** ile çalıştır.
 
 ```bash
 # FVM kurulu değilse: dart pub global activate fvm
-fvm install            # .fvmrc'deki sürümü (3.44.4) indirir
+fvm install            # .fvmrc'deki sürümü (3.44.6) indirir
 fvm flutter pub get
 ```
 

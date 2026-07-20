@@ -12,10 +12,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Flutter sürümü .fvmrc ile aynı sabitlenir (bkz. FVM 3.44.4).
+      # Flutter sürümü .fvmrc ile aynı sabitlenir (bkz. FVM 3.44.6).
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: 3.44.4
+          flutter-version: 3.44.6
           channel: stable
           cache: true
 
