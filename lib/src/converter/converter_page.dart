@@ -52,6 +52,31 @@ class _ConverterPageState extends State<ConverterPage>
     context.showSnack('Dart kodu panoya kopyalandı.');
   }
 
+  /// JSON'u onarır; içeriği değiştirecekse önce onay ister (üzerine yazma
+  /// geri döndürülmesi yalnızca "Geri Al"a bağlı olduğundan).
+  Future<void> _autoFix() async {
+    final rep = repairJson(_input.text);
+    if (rep == null) {
+      context.showSnack('Onarılamadı: yaygın JSON hataları düzeltilemedi.');
+      return;
+    }
+    if (rep == _input.text) {
+      context.showSnack('JSON zaten geçerli.');
+      return;
+    }
+    final ok = await context.confirm(
+      title: 'Oto-Düzelt',
+      message:
+          'JSON onarıldı. Onarım tek tırnak, sondaki virgül ve tırnaksız '
+          'anahtar gibi hataları düzeltir; nadiren metin içeriğini '
+          'değiştirebilir. Sonuç uygulansın mı? '
+          '("Geri Al" ile döndürebilirsiniz.)',
+      confirmLabel: 'Uygula',
+    );
+    if (!mounted || !ok) return;
+    cubit.setActiveContent(rep, immediate: true);
+  }
+
   @override
   Widget build(BuildContext context) {
     final codeColors = CodeColors.of(Theme.of(context).brightness);
@@ -69,7 +94,9 @@ class _ConverterPageState extends State<ConverterPage>
               child: BlocBuilder<WorkspaceCubit, WorkspaceState>(
                 buildWhen: (p, c) =>
                     p.jsonErrorLine != c.jsonErrorLine ||
-                    p.jsonError != c.jsonError,
+                    p.jsonError != c.jsonError ||
+                    p.canUndo != c.canUndo ||
+                    p.canRedo != c.canRedo,
                 builder: (context, state) {
                   return PaneCard(
                     title: 'JSON',
@@ -101,24 +128,17 @@ class _ConverterPageState extends State<ConverterPage>
                       ToolButton(
                         icon: Icons.auto_fix_high,
                         label: 'Oto-Düzelt',
-                        onPressed: () {
-                          final rep = repairJson(_input.text);
-                          if (rep != null) {
-                            cubit.setActiveContent(rep, immediate: true);
-                          } else {
-                            context.showSnack('Onarılamadı.');
-                          }
-                        },
+                        onPressed: _autoFix,
                       ),
                       ToolButton(
                         icon: Icons.undo,
                         label: 'Geri Al',
-                        onPressed: cubit.canUndo ? () => cubit.undo() : null,
+                        onPressed: state.canUndo ? () => cubit.undo() : null,
                       ),
                       ToolButton(
                         icon: Icons.redo,
                         label: 'İleri Al',
-                        onPressed: cubit.canRedo ? () => cubit.redo() : null,
+                        onPressed: state.canRedo ? () => cubit.redo() : null,
                       ),
                       ToolButton(
                         icon: Icons.clear,

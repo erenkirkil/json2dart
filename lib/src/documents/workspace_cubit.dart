@@ -24,6 +24,8 @@ class WorkspaceState extends Equatable {
     this.jsonError,
     this.jsonErrorLine,
     this.parseRevision = 0,
+    this.canUndo = false,
+    this.canRedo = false,
   });
 
   final List<JsonDocument> documents;
@@ -40,6 +42,11 @@ class WorkspaceState extends Equatable {
   final String? jsonError;
   final int? jsonErrorLine;
   final int parseRevision;
+
+  // Aktif belgenin geçmiş durumundan türetilir; UI'nın Geri Al/İleri Al
+  // düğmelerinin doğru zamanda yeniden çizilebilmesi için state'in parçası.
+  final bool canUndo;
+  final bool canRedo;
 
   JsonDocument? get activeDocument {
     for (final d in documents) {
@@ -78,6 +85,8 @@ class WorkspaceState extends Equatable {
     Object? jsonError = _sentinel,
     Object? jsonErrorLine = _sentinel,
     int? parseRevision,
+    bool? canUndo,
+    bool? canRedo,
   }) {
     return WorkspaceState(
       documents: documents ?? this.documents,
@@ -94,6 +103,8 @@ class WorkspaceState extends Equatable {
           ? this.jsonErrorLine
           : jsonErrorLine as int?,
       parseRevision: parseRevision ?? this.parseRevision,
+      canUndo: canUndo ?? this.canUndo,
+      canRedo: canRedo ?? this.canRedo,
     );
   }
 
@@ -112,6 +123,8 @@ class WorkspaceState extends Equatable {
     jsonError,
     jsonErrorLine,
     parseRevision,
+    canUndo,
+    canRedo,
   ];
 }
 
@@ -154,7 +167,7 @@ class WorkspaceCubit extends Cubit<WorkspaceState> {
       settings: snap.settings,
       loaded: true,
     );
-    emit(_withDerived(base, base.activeContent, immediate: true));
+    _emit(_withDerived(base, base.activeContent, immediate: true));
   }
 
   JsonDocument _newDoc({required String title, required String content}) {
@@ -194,7 +207,7 @@ class WorkspaceCubit extends Cubit<WorkspaceState> {
       openIds: openIds,
       activeId: doc.id,
     );
-    emit(_withDerived(next, doc.content, immediate: true));
+    _emit(_withDerived(next, doc.content, immediate: true));
     _schedulePersist();
   }
 
@@ -205,7 +218,7 @@ class WorkspaceCubit extends Cubit<WorkspaceState> {
         : [...state.openIds, id];
     final doc = state.documents.firstWhere((d) => d.id == id);
     final next = state.copyWith(openIds: openIds, activeId: id);
-    emit(_withDerived(next, doc.content, immediate: true));
+    _emit(_withDerived(next, doc.content, immediate: true));
     _schedulePersist();
   }
 
@@ -213,7 +226,7 @@ class WorkspaceCubit extends Cubit<WorkspaceState> {
     final openIds = [...state.openIds]..remove(id);
     final activeId = _nextActiveAfterClose(openIds, state.activeId, id);
     final next = state.copyWith(openIds: openIds, activeId: activeId);
-    emit(
+    _emit(
       _withDerived(
         next,
         _contentFor(state.documents, activeId),
@@ -224,6 +237,7 @@ class WorkspaceCubit extends Cubit<WorkspaceState> {
   }
 
   void deleteDocument(String id) {
+    _histories.remove(id); // belge kalıcı silindi: geçmişini de bırak (sızıntı)
     final documents = [...state.documents]..removeWhere((d) => d.id == id);
     final openIds = [...state.openIds]..remove(id);
     final activeId = _nextActiveAfterClose(openIds, state.activeId, id);
@@ -232,7 +246,7 @@ class WorkspaceCubit extends Cubit<WorkspaceState> {
       openIds: openIds,
       activeId: activeId,
     );
-    emit(_withDerived(next, _contentFor(documents, activeId), immediate: true));
+    _emit(_withDerived(next, _contentFor(documents, activeId), immediate: true));
     _schedulePersist();
   }
 
@@ -244,7 +258,7 @@ class WorkspaceCubit extends Cubit<WorkspaceState> {
         else
           d,
     ];
-    emit(state.copyWith(documents: documents));
+    _emit(state.copyWith(documents: documents));
     _schedulePersist();
   }
 
@@ -254,17 +268,17 @@ class WorkspaceCubit extends Cubit<WorkspaceState> {
 
   _DocHistory _history(String id) => _histories.putIfAbsent(id, () => _DocHistory());
 
-  bool get canUndo {
-    final id = state.activeId;
-    if (id == null) return false;
-    return _history(id).index > 0;
-  }
+  /// Tüm emit'ler buradan geçer: aktif belgenin geçmiş durumundan türetilen
+  /// canUndo/canRedo bayrakları state'e damgalanır ki UI güncel kalsın.
+  void _emit(WorkspaceState s) => emit(_stampHistory(s));
 
-  bool get canRedo {
-    final id = state.activeId;
-    if (id == null) return false;
-    final h = _history(id);
-    return h.index < h.items.length - 1;
+  WorkspaceState _stampHistory(WorkspaceState s) {
+    final id = s.activeId;
+    final h = id == null ? null : _histories[id];
+    final canUndo = h != null && h.index > 0;
+    final canRedo = h != null && h.index < h.items.length - 1;
+    if (s.canUndo == canUndo && s.canRedo == canRedo) return s;
+    return s.copyWith(canUndo: canUndo, canRedo: canRedo);
   }
 
   void undo() {
@@ -296,7 +310,7 @@ class WorkspaceCubit extends Cubit<WorkspaceState> {
           d,
     ];
     final next = state.copyWith(documents: documents);
-    emit(_withDerived(next, text, immediate: immediate));
+    _emit(_withDerived(next, text, immediate: immediate));
     _schedulePersist();
   }
 
@@ -322,7 +336,7 @@ class WorkspaceCubit extends Cubit<WorkspaceState> {
   void updateSettings(GeneratorSettings settings) {
     _storage.saveSettings(settings);
     final next = state.copyWith(settings: settings);
-    emit(_withDerived(next, next.activeContent, immediate: true));
+    _emit(_withDerived(next, next.activeContent, immediate: true));
   }
 
   // --------------------------------------------------------------- biçimlendirme
@@ -356,7 +370,7 @@ class WorkspaceCubit extends Cubit<WorkspaceState> {
     if (!immediate) {
       _recomputeTimer = Timer(const Duration(milliseconds: 300), () {
         if (isClosed) return;
-        emit(_computeDerived(state, state.activeContent));
+        _emit(_computeDerived(state, state.activeContent));
       });
       return base;
     }

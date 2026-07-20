@@ -14,7 +14,8 @@ class TabBarStrip extends StatelessWidget {
       buildWhen: (p, c) =>
           p.openIds != c.openIds ||
           p.activeId != c.activeId ||
-          p.documents != c.documents,
+          p.documents != c.documents ||
+          p.classCount != c.classCount,
       builder: (context, state) {
         final cubit = context.read<WorkspaceCubit>();
         final open = state.openDocuments;

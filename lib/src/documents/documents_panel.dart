@@ -38,7 +38,9 @@ class DocumentsPanel extends StatelessWidget {
           Expanded(
             child: BlocBuilder<WorkspaceCubit, WorkspaceState>(
               buildWhen: (p, c) =>
-                  p.documents != c.documents || p.activeId != c.activeId,
+                  p.documents != c.documents ||
+                  p.activeId != c.activeId ||
+                  p.openIds != c.openIds,
               builder: (context, state) {
                 final docs = state.sortedDocuments;
                 if (docs.isEmpty) {

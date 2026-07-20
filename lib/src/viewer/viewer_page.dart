@@ -184,6 +184,65 @@ class _ViewerPageState extends State<ViewerPage> with ActiveDocumentEditor {
     cubit.setActiveContent(mini, immediate: true);
   }
 
+  /// JSON'u onarır; içeriği değiştirecekse önce onay ister.
+  Future<void> _autoFix() async {
+    final rep = repairJson(_text.text);
+    if (rep == null) {
+      context.showSnack('Onarılamadı: yaygın JSON hataları düzeltilemedi.');
+      return;
+    }
+    if (rep == _text.text) {
+      context.showSnack('JSON zaten geçerli.');
+      return;
+    }
+    final ok = await context.confirm(
+      title: 'Oto-Düzelt',
+      message:
+          'JSON onarıldı. Onarım tek tırnak, sondaki virgül ve tırnaksız '
+          'anahtar gibi hataları düzeltir; nadiren metin içeriğini '
+          'değiştirebilir. Sonuç uygulansın mı? '
+          '("Geri Al" ile döndürebilirsiniz.)',
+      confirmLabel: 'Uygula',
+    );
+    if (!mounted || !ok) return;
+    cubit.setActiveContent(rep, immediate: true);
+  }
+
+  /// Aramadaki eşleşmeleri, kullanıcı onayladıktan sonra topluca değiştirir.
+  Future<void> _replaceAllAction() async {
+    if (_searchQuery.isEmpty) return;
+    final target = _replace.text;
+    final ok = await context.confirm(
+      title: 'Tümünü Değiştir',
+      message: _showText
+          ? '$_matchCount eşleşme "$_searchQuery" → "$target" olarak '
+                'değiştirilecek. Bu, metni geçersiz JSON hâline getirebilir. '
+                'Devam edilsin mi? ("Geri Al" ile döndürebilirsiniz.)'
+          : '"$_searchQuery" ifadesi ağaçtaki anahtarlarda ve metin '
+                'değerlerinde (büyük/küçük harf duyarsız) "$target" ile '
+                'değiştirilecek. Devam edilsin mi? '
+                '("Geri Al" ile döndürebilirsiniz.)',
+      confirmLabel: 'Değiştir',
+    );
+    if (!mounted || !ok) return;
+    if (_showText) {
+      final newText = _text.text.replaceAll(
+        RegExp(RegExp.escape(_searchQuery), caseSensitive: false),
+        target,
+      );
+      cubit.setActiveContent(newText, immediate: true);
+    } else if (cubit.state.parsed != null) {
+      final replaced = _replaceAll(cubit.state.parsed, _searchQuery, target);
+      final formatted = const JsonEncoder.withIndent('  ').convert(replaced);
+      cubit.setActiveContent(formatted, immediate: true);
+    }
+    context.showSnack('Değiştirme uygulandı.');
+    // İçerik değiştiği için eşleşme sayacı/işaretlemeleri tazele (bayat kalmasın).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _performSearch();
+    });
+  }
+
   dynamic _replaceAll(dynamic obj, String query, String replacement) {
     final pattern = RegExp(RegExp.escape(query), caseSensitive: false);
     if (obj is Map) {
@@ -261,7 +320,7 @@ class _ViewerPageState extends State<ViewerPage> with ActiveDocumentEditor {
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          _buildToolbar(),
+                          _buildToolbar(state),
                           if (state.jsonError != null)
                             ErrorBanner(message: state.jsonError!),
                           const SizedBox(height: 8),
@@ -289,7 +348,7 @@ class _ViewerPageState extends State<ViewerPage> with ActiveDocumentEditor {
     );
   }
 
-  Widget _buildToolbar() {
+  Widget _buildToolbar(WorkspaceState state) {
     return Row(
       children: [
         SegmentedButton<bool>(
@@ -347,14 +406,7 @@ class _ViewerPageState extends State<ViewerPage> with ActiveDocumentEditor {
                 ToolButton(
                   icon: Icons.auto_fix_high,
                   label: 'Oto-Düzelt',
-                  onPressed: () {
-                    final rep = repairJson(_text.text);
-                    if (rep != null) {
-                      cubit.setActiveContent(rep, immediate: true);
-                    } else {
-                      context.showSnack('Onarılamadı.');
-                    }
-                  },
+                  onPressed: _autoFix,
                 ),
                 ToolButton(
                   icon: Icons.compress,
@@ -364,12 +416,12 @@ class _ViewerPageState extends State<ViewerPage> with ActiveDocumentEditor {
                 ToolButton(
                   icon: Icons.undo,
                   label: 'Geri Al',
-                  onPressed: cubit.canUndo ? () => cubit.undo() : null,
+                  onPressed: state.canUndo ? () => cubit.undo() : null,
                 ),
                 ToolButton(
                   icon: Icons.redo,
                   label: 'İleri Al',
-                  onPressed: cubit.canRedo ? () => cubit.redo() : null,
+                  onPressed: state.canRedo ? () => cubit.redo() : null,
                 ),
                 ToolButton(
                   icon: Icons.clear,
@@ -505,19 +557,7 @@ class _ViewerPageState extends State<ViewerPage> with ActiveDocumentEditor {
               IconButton(
                 icon: const Icon(Icons.find_replace, size: 16),
                 tooltip: 'Tümünü Değiştir',
-                onPressed: () {
-                  if (_searchQuery.isNotEmpty) {
-                    if (_showText) {
-                      final newText = _text.text.replaceAll(RegExp(RegExp.escape(_searchQuery), caseSensitive: false), _replace.text);
-                      cubit.setActiveContent(newText, immediate: true);
-                    } else if (cubit.state.parsed != null) {
-                      final replaced = _replaceAll(cubit.state.parsed, _searchQuery, _replace.text);
-                      final formatted = const JsonEncoder.withIndent('  ').convert(replaced);
-                      cubit.setActiveContent(formatted, immediate: true);
-                    }
-                    context.showSnack('Bulunanlar değiştirildi.');
-                  }
-                },
+                onPressed: _matchCount == 0 ? null : _replaceAllAction,
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
               ),

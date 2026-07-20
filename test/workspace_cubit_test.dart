@@ -97,6 +97,48 @@ void main() {
     await cubit.close();
   });
 
+  test('geri al/ileri al bayrakları state üzerinden güncellenir', () async {
+    final cubit = await _ready();
+    // Başlangıçta geçmiş yok.
+    expect(cubit.state.canUndo, isFalse);
+    expect(cubit.state.canRedo, isFalse);
+
+    // İlk düzenleme: eski + yeni geçmişe girer -> geri alınabilir.
+    cubit.setActiveContent('{"a": 1}', immediate: true);
+    expect(cubit.state.canUndo, isTrue);
+    expect(cubit.state.canRedo, isFalse);
+
+    // Geri al: yeniden yapılabilir, geri alınamaz duruma döner.
+    cubit.undo();
+    expect(cubit.state.canUndo, isFalse);
+    expect(cubit.state.canRedo, isTrue);
+
+    // İleri al: tekrar geri alınabilir.
+    cubit.redo();
+    expect(cubit.state.canUndo, isTrue);
+    expect(cubit.state.canRedo, isFalse);
+    await cubit.close();
+  });
+
+  test('belge silinince geçmiş bayrakları sıfırlanır', () async {
+    final cubit = await _ready();
+    cubit.setActiveContent('{"a": 1}', immediate: true);
+    cubit.newDocument(content: '{"b": 2}');
+    cubit.setActiveContent('{"b": 22}', immediate: true);
+    final second = cubit.state.activeId!;
+    expect(cubit.state.canUndo, isTrue);
+
+    // Aktif belgeyi sil: aktif başka belgeye geçer, onun geçmişi yansır.
+    cubit.deleteDocument(second);
+    expect(cubit.state.activeId, isNot(second));
+    // Kalan belgenin de bir düzenleme geçmişi var (canUndo true kalabilir),
+    // ama silinen belgenin geçmişi haritadan düşmüş olmalı: yeniden aynı
+    // içerikle açılırsa taze başlar. Burada yalnızca bayrağın tutarlılığını
+    // doğruluyoruz (silinen id'ye ait bayrak sızmaz).
+    expect(cubit.state.canRedo, isFalse);
+    await cubit.close();
+  });
+
   test('ayar değişikliği kodu yeniden üretir', () async {
     final cubit = await _ready();
     cubit.setActiveContent('{"user_name": "e"}', immediate: true);
