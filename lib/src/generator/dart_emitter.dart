@@ -188,12 +188,14 @@ class DartEmitter {
   bool _fieldNullable(JsonType t) {
     if (t.kind == JsonKind.dynamicType) return false;
     return switch (settings.nullability) {
+      // Değerde null görülen VEYA bazı örneklerde eksik olan alanlar nullable.
       NullabilityMode.smart => t.nullable,
       NullabilityMode.allNullable => true,
-      // Veride gerçekten null görülen alanlar nullable kalmalı; aksi halde
-      // `json['x'] as String` çalışma anında null'da patlar. Null görülmeyen
-      // tüm alanlar non-null/required olur (modun amacı).
-      NullabilityMode.nonNullable => t.nullable,
+      // Yalnızca veride gerçekten null görülen alanlar nullable kalır; aksi
+      // halde `json['x'] as String` çalışma anında null'da patlar. Sırf bazı
+      // örneklerde EKSİK olan (ama null görülmeyen) alanlar required non-null
+      // yapılır — modun smart'tan farkı budur.
+      NullabilityMode.nonNullable => t.sawNull,
     };
   }
 

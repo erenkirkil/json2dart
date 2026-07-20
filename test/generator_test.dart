@@ -144,6 +144,30 @@ void main() {
       expect(r.code, contains('required this.a'));
     });
 
+    test('hepsi non-null: yalnızca eksik olan (null görülmeyen) alan required olur', () {
+      // x ve y birbirlerinin örneğinde EKSİK ama hiç null GÖRÜLMEDİ.
+      // smart modda ikisi de nullable; nonNullable modda required non-null olmalı.
+      // Bu, iki modun gerçekten farklılaştığını doğrular.
+      const j = '{"items": [{"x": 1}, {"y": 2}]}';
+
+      final smart = _generate(j);
+      expect(smart.code, contains('final int? x;'));
+      expect(smart.code, contains('final int? y;'));
+
+      final nonNull = _generate(
+        j,
+        const GeneratorSettings(
+          style: SerializerStyle.manual,
+          nullability: NullabilityMode.nonNullable,
+        ),
+      );
+      expect(nonNull.code, contains('final int x;'));
+      expect(nonNull.code, contains('final int y;'));
+      expect(nonNull.code, contains('required this.x'));
+      expect(nonNull.code, contains('required this.y'));
+      expect(nonNull.code, isNot(contains('final int? x;')));
+    });
+
     test('hepsi non-null: veride null görülen alan yine de nullable kalır', () {
       // [{"name":"a"},{"name":null}] -> name veride null görülür.
       // nonNullable modunda bile `String?` üretilmeli, yoksa fromJson patlar.
