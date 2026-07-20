@@ -65,7 +65,7 @@ class TabBarStrip extends StatelessWidget {
   }
 }
 
-class _Tab extends StatelessWidget {
+class _Tab extends StatefulWidget {
   const _Tab({
     required this.title,
     required this.active,
@@ -79,17 +79,24 @@ class _Tab extends StatelessWidget {
   final VoidCallback onClose;
 
   @override
+  State<_Tab> createState() => _TabState();
+}
+
+class _TabState extends State<_Tab> {
+  bool _hoverClose = false;
+
+  @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return InkWell(
-      onTap: onTap,
+      onTap: widget.onTap,
       child: Container(
         constraints: const BoxConstraints(maxWidth: 190),
         decoration: BoxDecoration(
-          color: active ? scheme.surface : Colors.transparent,
+          color: widget.active ? scheme.surface : Colors.transparent,
           border: Border(
             bottom: BorderSide(
-              color: active ? scheme.primary : Colors.transparent,
+              color: widget.active ? scheme.primary : Colors.transparent,
               width: 2,
             ),
             right: BorderSide(color: scheme.outlineVariant, width: 1),
@@ -101,26 +108,27 @@ class _Tab extends StatelessWidget {
           children: [
             Flexible(
               child: Text(
-                title,
+                widget.title,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   fontSize: 12.5,
-                  fontWeight: active ? FontWeight.w600 : FontWeight.w400,
-                  color: active ? scheme.onSurface : scheme.onSurfaceVariant,
+                  fontWeight: widget.active ? FontWeight.w600 : FontWeight.w400,
+                  color: widget.active ? scheme.onSurface : scheme.onSurfaceVariant,
                 ),
               ),
             ),
             const SizedBox(width: 4),
             InkWell(
-              onTap: onClose,
+              onTap: widget.onClose,
+              onHover: (val) => setState(() => _hoverClose = val),
               borderRadius: BorderRadius.circular(4),
               child: Padding(
                 padding: const EdgeInsets.all(3),
                 child: Icon(
                   Icons.close,
                   size: 14,
-                  color: scheme.onSurfaceVariant,
+                  color: _hoverClose ? scheme.error : scheme.onSurfaceVariant,
                 ),
               ),
             ),

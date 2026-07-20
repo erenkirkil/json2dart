@@ -17,6 +17,8 @@ dependencies:
   equatable: ^2.1.0
   shared_preferences: ^2.5.5
   dart_style: ^3.1.9
+  file_picker: ^11.0.2
+  window_manager: ^0.5.2
 
 dev_dependencies:
   flutter_test:

@@ -136,7 +136,7 @@ class WorkspaceCubit extends Cubit<WorkspaceState> {
     var activeId = snap.activeId;
 
     if (documents.isEmpty) {
-      final doc = _newDoc(title: 'Belge 1', content: '');
+      final doc = _newDoc(title: 'Yeni Dosya', content: '');
       documents = [doc];
       openIds = [doc.id];
       activeId = doc.id;
@@ -186,8 +186,7 @@ class WorkspaceCubit extends Cubit<WorkspaceState> {
   // ------------------------------------------------------------- belge işlemleri
 
   void newDocument({String? content, String? title}) {
-    final n = state.documents.length + 1;
-    final doc = _newDoc(title: title ?? 'Belge $n', content: content ?? '');
+    final doc = _newDoc(title: title ?? 'Yeni Dosya', content: content ?? '');
     final documents = [...state.documents, doc];
     final openIds = [...state.openIds, doc.id];
     final next = state.copyWith(
@@ -251,6 +250,56 @@ class WorkspaceCubit extends Cubit<WorkspaceState> {
 
   // ------------------------------------------------------------- içerik & ayar
 
+  final Map<String, _DocHistory> _histories = {};
+
+  _DocHistory _history(String id) => _histories.putIfAbsent(id, () => _DocHistory());
+
+  bool get canUndo {
+    final id = state.activeId;
+    if (id == null) return false;
+    return _history(id).index > 0;
+  }
+
+  bool get canRedo {
+    final id = state.activeId;
+    if (id == null) return false;
+    final h = _history(id);
+    return h.index < h.items.length - 1;
+  }
+
+  void undo() {
+    final id = state.activeId;
+    if (id == null) return;
+    final h = _history(id);
+    if (h.index > 0) {
+      h.index--;
+      _setContentWithoutHistory(id, h.items[h.index]);
+    }
+  }
+
+  void redo() {
+    final id = state.activeId;
+    if (id == null) return;
+    final h = _history(id);
+    if (h.index < h.items.length - 1) {
+      h.index++;
+      _setContentWithoutHistory(id, h.items[h.index]);
+    }
+  }
+
+  void _setContentWithoutHistory(String id, String text, {bool immediate = true}) {
+    final documents = [
+      for (final d in state.documents)
+        if (d.id == id)
+          d.copyWith(content: text, updatedAt: DateTime.now().millisecondsSinceEpoch)
+        else
+          d,
+    ];
+    final next = state.copyWith(documents: documents);
+    emit(_withDerived(next, text, immediate: immediate));
+    _schedulePersist();
+  }
+
   /// Aktif belgenin içeriğini günceller.
   /// [immediate] false ise üretim 300 ms geciktirilir (yazarken performans).
   void setActiveContent(String text, {bool immediate = false}) {
@@ -259,19 +308,15 @@ class WorkspaceCubit extends Cubit<WorkspaceState> {
       newDocument(content: text);
       return;
     }
-    final documents = [
-      for (final d in state.documents)
-        if (d.id == activeId)
-          d.copyWith(
-            content: text,
-            updatedAt: DateTime.now().millisecondsSinceEpoch,
-          )
-        else
-          d,
-    ];
-    final next = state.copyWith(documents: documents);
-    emit(_withDerived(next, text, immediate: immediate));
-    _schedulePersist();
+    
+    final h = _history(activeId);
+    if (h.items.isEmpty) {
+      final oldContent = _contentFor(state.documents, activeId);
+      h.push(oldContent);
+    }
+    h.push(text);
+
+    _setContentWithoutHistory(activeId, text, immediate: immediate);
   }
 
   void updateSettings(GeneratorSettings settings) {
@@ -386,5 +431,23 @@ class WorkspaceCubit extends Cubit<WorkspaceState> {
     _persistTimer?.cancel();
     _persistNow(); // kapanışta son durumu hemen kaydet
     return super.close();
+  }
+}
+
+class _DocHistory {
+  List<String> items = [];
+  int index = -1;
+
+  void push(String text) {
+    if (index >= 0 && items[index] == text) return;
+    if (index < items.length - 1) {
+      items.removeRange(index + 1, items.length);
+    }
+    items.add(text);
+    if (items.length > 50) {
+      items.removeAt(0);
+    } else {
+      index++;
+    }
   }
 }

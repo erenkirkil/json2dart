@@ -5,10 +5,13 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../common/context_ext.dart';
 import '../common/dart_highlighter.dart';
 import '../common/line_numbered_field.dart';
-import '../common/sample_json.dart';
+import '../common/json_repair.dart';
+import '../common/json_syntax_controller.dart';
 import '../common/widgets.dart';
 import '../documents/active_document_editor.dart';
 import '../documents/workspace_cubit.dart';
+import 'dart:io';
+import 'package:file_picker/file_picker.dart';
 import 'settings_panel.dart';
 
 /// JSON -> Dart dönüştürücü ekranı (aktif belge üzerinde çalışır).
@@ -24,7 +27,7 @@ class ConverterPage extends StatefulWidget {
 
 class _ConverterPageState extends State<ConverterPage>
     with ActiveDocumentEditor {
-  final TextEditingController _input = TextEditingController();
+  final JsonSyntaxController _input = JsonSyntaxController();
   final ScrollController _outputScroll = ScrollController();
 
   @override
@@ -77,21 +80,51 @@ class _ConverterPageState extends State<ConverterPage>
                         onPressed: pasteIntoActive,
                       ),
                       ToolButton(
+                        icon: Icons.upload_file,
+                        label: 'İçe Aktar',
+                        onPressed: () async {
+                          final result = await FilePicker.pickFiles(
+                            type: FileType.custom,
+                            allowedExtensions: ['json', 'txt'],
+                          );
+                          if (result != null && result.files.single.path != null) {
+                            final content = await File(result.files.single.path!).readAsString();
+                            cubit.setActiveContent(content, immediate: true);
+                          }
+                        },
+                      ),
+                      ToolButton(
                         icon: Icons.format_align_left,
                         label: 'Biçimlendir',
                         onPressed: formatActive,
+                      ),
+                      ToolButton(
+                        icon: Icons.auto_fix_high,
+                        label: 'Oto-Düzelt',
+                        onPressed: () {
+                          final rep = repairJson(_input.text);
+                          if (rep != null) {
+                            cubit.setActiveContent(rep, immediate: true);
+                          } else {
+                            context.showSnack('Onarılamadı.');
+                          }
+                        },
+                      ),
+                      ToolButton(
+                        icon: Icons.undo,
+                        label: 'Geri Al',
+                        onPressed: cubit.canUndo ? () => cubit.undo() : null,
+                      ),
+                      ToolButton(
+                        icon: Icons.redo,
+                        label: 'İleri Al',
+                        onPressed: cubit.canRedo ? () => cubit.redo() : null,
                       ),
                       ToolButton(
                         icon: Icons.clear,
                         label: 'Temizle',
                         onPressed: () =>
                             cubit.setActiveContent('', immediate: true),
-                      ),
-                      ToolButton(
-                        icon: Icons.science_outlined,
-                        label: 'Örnek',
-                        onPressed: () =>
-                            cubit.setActiveContent(sampleJson, immediate: true),
                       ),
                       ToolButton(
                         icon: Icons.account_tree_outlined,
@@ -158,7 +191,7 @@ class _ConverterPageState extends State<ConverterPage>
                           child: Text(
                             'Çıktı burada görünecek.\n'
                             'Soldaki alana JSON yapıştırın '
-                            'veya "Örnek" düğmesine basın.',
+                            'veya "Yapıştır" düğmesine basın.',
                             textAlign: TextAlign.center,
                             style: TextStyle(
                               color: Theme.of(

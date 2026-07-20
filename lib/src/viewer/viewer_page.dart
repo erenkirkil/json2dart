@@ -8,11 +8,22 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../common/context_ext.dart';
 import '../common/json_preview.dart';
 import '../common/line_numbered_field.dart';
-import '../common/sample_json.dart';
+import '../common/json_repair.dart';
+import '../common/json_syntax_controller.dart';
 import '../common/widgets.dart';
 import '../documents/active_document_editor.dart';
 import '../documents/workspace_cubit.dart';
 import 'json_tree_view.dart';
+import 'dart:io';
+import 'package:file_picker/file_picker.dart';
+
+class SearchIntent extends Intent {
+  const SearchIntent();
+}
+
+class CloseSearchIntent extends Intent {
+  const CloseSearchIntent();
+}
 
 /// JSON görüntüleyici / biçimlendirici ekranı (aktif belge üzerinde çalışır).
 class ViewerPage extends StatefulWidget {
@@ -26,17 +37,23 @@ class ViewerPage extends StatefulWidget {
 }
 
 class _ViewerPageState extends State<ViewerPage> with ActiveDocumentEditor {
-  final TextEditingController _text = TextEditingController();
+  final JsonSyntaxController _text = JsonSyntaxController();
   final GlobalKey<JsonTreeViewState> _treeKey = GlobalKey<JsonTreeViewState>();
   final TextEditingController _search = TextEditingController();
+  final TextEditingController _replace = TextEditingController();
+  final FocusNode _searchFocus = FocusNode();
   Timer? _searchDebounce;
 
   bool _showText = false;
+  bool _isSearchVisible = false;
   String? _selectedPath;
   dynamic _selectedValue;
   String _searchQuery = '';
   int _matchCount = 0;
   int _matchIndex = -1;
+  
+  final List<int> _textMatchOffsets = [];
+  int _textMatchIndex = -1;
 
   @override
   TextEditingController get editorController => _text;
@@ -51,23 +68,111 @@ class _ViewerPageState extends State<ViewerPage> with ActiveDocumentEditor {
   void dispose() {
     _text.dispose();
     _search.dispose();
+    _replace.dispose();
+    _searchFocus.dispose();
     _searchDebounce?.cancel();
     super.dispose();
   }
 
   void _onSearchChanged(String value) {
-    // Temizle düğmesi gibi anlık UI durumunu hemen yenile.
     setState(() {});
     _searchDebounce?.cancel();
     _searchDebounce = Timer(const Duration(milliseconds: 250), () {
-      if (mounted) setState(() => _searchQuery = value);
+      if (mounted) {
+        setState(() => _searchQuery = value);
+        _performSearch();
+      }
     });
   }
 
   void _clearSearch() {
     _searchDebounce?.cancel();
     _search.clear();
-    setState(() => _searchQuery = '');
+    setState(() {
+      _searchQuery = '';
+      _performSearch();
+    });
+  }
+
+  void _performSearch() {
+    if (_showText) {
+      _textMatchOffsets.clear();
+      _textMatchIndex = -1;
+      _matchCount = 0;
+      _matchIndex = -1;
+      if (_searchQuery.isNotEmpty) {
+        final text = _text.text;
+        int i = 0;
+        while (true) {
+          final idx = text.toLowerCase().indexOf(_searchQuery.toLowerCase(), i);
+          if (idx == -1) break;
+          _textMatchOffsets.add(idx);
+          i = idx + _searchQuery.length;
+        }
+        _matchCount = _textMatchOffsets.length;
+        if (_matchCount > 0) {
+          _textMatchIndex = 0;
+          _matchIndex = 0;
+          _highlightTextMatch();
+        }
+      }
+      setState(() {});
+    } else {
+      if (_searchQuery.isEmpty) {
+        setState(() {
+          _matchCount = 0;
+          _matchIndex = -1;
+        });
+      }
+    }
+  }
+
+  void _highlightTextMatch() {
+    if (_textMatchIndex >= 0 && _textMatchIndex < _textMatchOffsets.length) {
+      final start = _textMatchOffsets[_textMatchIndex];
+      final end = start + _searchQuery.length;
+      _text.selection = TextSelection(baseOffset: start, extentOffset: end);
+    }
+  }
+
+  void _nextMatch() {
+    if (_showText) {
+      if (_matchCount > 0) {
+        setState(() {
+          _textMatchIndex = (_textMatchIndex + 1) % _matchCount;
+          _matchIndex = _textMatchIndex;
+        });
+        _highlightTextMatch();
+      }
+    } else {
+      _treeKey.currentState?.nextMatch();
+    }
+  }
+
+  void _previousMatch() {
+    if (_showText) {
+      if (_matchCount > 0) {
+        setState(() {
+          _textMatchIndex = (_textMatchIndex - 1 + _matchCount) % _matchCount;
+          _matchIndex = _textMatchIndex;
+        });
+        _highlightTextMatch();
+      }
+    } else {
+      _treeKey.currentState?.previousMatch();
+    }
+  }
+
+  void _closeSearch() {
+    setState(() {
+      _isSearchVisible = false;
+      _searchQuery = '';
+      _search.clear();
+      _matchCount = 0;
+      _matchIndex = -1;
+      _textMatchOffsets.clear();
+      _textMatchIndex = -1;
+    });
   }
 
   void _minify() {
@@ -79,45 +184,106 @@ class _ViewerPageState extends State<ViewerPage> with ActiveDocumentEditor {
     cubit.setActiveContent(mini, immediate: true);
   }
 
+  dynamic _replaceAll(dynamic obj, String query, String replacement) {
+    final pattern = RegExp(RegExp.escape(query), caseSensitive: false);
+    if (obj is Map) {
+      final newMap = <String, dynamic>{};
+      for (final entry in obj.entries) {
+        final newKey = entry.key.toString().replaceAll(pattern, replacement);
+        newMap[newKey] = _replaceAll(entry.value, query, replacement);
+      }
+      return newMap;
+    } else if (obj is List) {
+      return obj.map((e) => _replaceAll(e, query, replacement)).toList();
+    } else if (obj is String) {
+      return obj.replaceAll(pattern, replacement);
+    } else {
+      return obj;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(12),
-      child: MultiBlocListener(
-        listeners: [
-          contentSyncListener(
-            onSwitch: () {
-              if (mounted) {
-                _searchDebounce?.cancel();
-                _search.clear();
-                setState(() {
-                  _selectedPath = null;
-                  _selectedValue = null;
-                  _searchQuery = '';
-                  _matchCount = 0;
-                  _matchIndex = -1;
-                });
-              }
+    return Shortcuts(
+      shortcuts: <ShortcutActivator, Intent>{
+        const SingleActivator(LogicalKeyboardKey.keyF, meta: true): const SearchIntent(),
+        const SingleActivator(LogicalKeyboardKey.keyF, control: true): const SearchIntent(),
+        const SingleActivator(LogicalKeyboardKey.escape): const CloseSearchIntent(),
+      },
+      child: Actions(
+        actions: <Type, Action<Intent>>{
+          SearchIntent: CallbackAction<SearchIntent>(
+            onInvoke: (SearchIntent intent) {
+              setState(() {
+                _isSearchVisible = true;
+              });
+              _searchFocus.requestFocus();
+              return null;
             },
           ),
-        ],
-        child: BlocBuilder<WorkspaceCubit, WorkspaceState>(
-          builder: (context, state) {
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _buildToolbar(),
-                if (state.jsonError != null)
-                  ErrorBanner(message: state.jsonError!),
-                const SizedBox(height: 8),
-                Expanded(
-                  child: _showText
-                      ? _buildTextTab(state)
-                      : _buildTreeTab(state),
+          CloseSearchIntent: CallbackAction<CloseSearchIntent>(
+            onInvoke: (CloseSearchIntent intent) {
+              if (_isSearchVisible) {
+                _closeSearch();
+              }
+              return null;
+            },
+          ),
+        },
+        child: Focus(
+          autofocus: true,
+          child: Stack(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: MultiBlocListener(
+                  listeners: [
+                    contentSyncListener(
+                      onSwitch: () {
+                        if (mounted) {
+                          _searchDebounce?.cancel();
+                          _search.clear();
+                          setState(() {
+                            _selectedPath = null;
+                            _selectedValue = null;
+                            _searchQuery = '';
+                            _matchCount = 0;
+                            _matchIndex = -1;
+                            _textMatchOffsets.clear();
+                            _textMatchIndex = -1;
+                          });
+                        }
+                      },
+                    ),
+                  ],
+                  child: BlocBuilder<WorkspaceCubit, WorkspaceState>(
+                    builder: (context, state) {
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          _buildToolbar(),
+                          if (state.jsonError != null)
+                            ErrorBanner(message: state.jsonError!),
+                          const SizedBox(height: 8),
+                          Expanded(
+                            child: _showText
+                                ? _buildTextTab(state)
+                                : _buildTreeTab(state),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
                 ),
-              ],
-            );
-          },
+              ),
+              if (_isSearchVisible)
+                Positioned(
+                  top: 12,
+                  right: 12,
+                  child: _buildGlobalSearchBar(),
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -141,7 +307,12 @@ class _ViewerPageState extends State<ViewerPage> with ActiveDocumentEditor {
             ),
           ],
           selected: {_showText},
-          onSelectionChanged: (sel) => setState(() => _showText = sel.first),
+          onSelectionChanged: (sel) {
+            setState(() => _showText = sel.first);
+            if (_isSearchVisible) {
+              _performSearch();
+            }
+          },
         ),
         const SizedBox(width: 12),
         Expanded(
@@ -155,9 +326,35 @@ class _ViewerPageState extends State<ViewerPage> with ActiveDocumentEditor {
                   onPressed: pasteIntoActive,
                 ),
                 ToolButton(
+                  icon: Icons.upload_file,
+                  label: 'İçe Aktar',
+                  onPressed: () async {
+                    final result = await FilePicker.pickFiles(
+                      type: FileType.custom,
+                      allowedExtensions: ['json', 'txt'],
+                    );
+                    if (result != null && result.files.single.path != null) {
+                      final content = await File(result.files.single.path!).readAsString();
+                      cubit.setActiveContent(content, immediate: true);
+                    }
+                  },
+                ),
+                ToolButton(
                   icon: Icons.format_align_left,
                   label: 'Biçimlendir',
                   onPressed: formatActive,
+                ),
+                ToolButton(
+                  icon: Icons.auto_fix_high,
+                  label: 'Oto-Düzelt',
+                  onPressed: () {
+                    final rep = repairJson(_text.text);
+                    if (rep != null) {
+                      cubit.setActiveContent(rep, immediate: true);
+                    } else {
+                      context.showSnack('Onarılamadı.');
+                    }
+                  },
                 ),
                 ToolButton(
                   icon: Icons.compress,
@@ -165,15 +362,19 @@ class _ViewerPageState extends State<ViewerPage> with ActiveDocumentEditor {
                   onPressed: _minify,
                 ),
                 ToolButton(
+                  icon: Icons.undo,
+                  label: 'Geri Al',
+                  onPressed: cubit.canUndo ? () => cubit.undo() : null,
+                ),
+                ToolButton(
+                  icon: Icons.redo,
+                  label: 'İleri Al',
+                  onPressed: cubit.canRedo ? () => cubit.redo() : null,
+                ),
+                ToolButton(
                   icon: Icons.clear,
                   label: 'Temizle',
                   onPressed: () => cubit.setActiveContent('', immediate: true),
-                ),
-                ToolButton(
-                  icon: Icons.science_outlined,
-                  label: 'Örnek',
-                  onPressed: () =>
-                      cubit.setActiveContent(sampleJson, immediate: true),
                 ),
                 if (!_showText) ...[
                   const SizedBox(width: 8),
@@ -214,71 +415,126 @@ class _ViewerPageState extends State<ViewerPage> with ActiveDocumentEditor {
     );
   }
 
-  Widget _buildSearchBar() {
+  Widget _buildGlobalSearchBar() {
     final scheme = Theme.of(context).colorScheme;
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        SizedBox(
-          width: 160,
-          height: 30,
-          child: TextField(
-            controller: _search,
-            onChanged: _onSearchChanged,
-            onSubmitted: (_) => _treeKey.currentState?.nextMatch(),
-            style: const TextStyle(fontSize: 12.5),
-            decoration: InputDecoration(
-              isDense: true,
-              hintText: 'Ara...',
-              prefixIcon: const Icon(Icons.search, size: 16),
-              prefixIconConstraints: const BoxConstraints(
-                minWidth: 28,
-                minHeight: 28,
-              ),
-              suffixIcon: _search.text.isEmpty
-                  ? null
-                  : IconButton(
-                      icon: const Icon(Icons.close, size: 14),
-                      onPressed: _clearSearch,
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(
-                        minWidth: 28,
-                        minHeight: 28,
-                      ),
-                    ),
-              contentPadding: const EdgeInsets.symmetric(vertical: 4),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(6),
+    return Material(
+      elevation: 4,
+      borderRadius: BorderRadius.circular(8),
+      color: scheme.surface,
+      surfaceTintColor: scheme.surfaceTint,
+      shadowColor: Colors.black.withValues(alpha: 0.2),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: scheme.outlineVariant),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Arama kutusu
+            SizedBox(
+              width: 180,
+              height: 32,
+              child: TextField(
+                controller: _search,
+                focusNode: _searchFocus,
+                onChanged: _onSearchChanged,
+                onSubmitted: (_) => _nextMatch(),
+                style: const TextStyle(fontSize: 13),
+                decoration: InputDecoration(
+                  isDense: true,
+                  hintText: 'Ara...',
+                  prefixIcon: const Icon(Icons.search, size: 16),
+                  prefixIconConstraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                  suffixIcon: _search.text.isNotEmpty
+                      ? IconButton(
+                          icon: const Icon(Icons.close, size: 14),
+                          onPressed: _clearSearch,
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
+                        )
+                      : null,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 0),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+                ),
               ),
             ),
-          ),
+            if (_searchQuery.isNotEmpty) ...[
+              const SizedBox(width: 8),
+              Text(
+                _matchCount == 0 ? '0/0' : '${_matchIndex + 1}/$_matchCount',
+                style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+              ),
+              const SizedBox(width: 4),
+              IconButton(
+                icon: const Icon(Icons.keyboard_arrow_up, size: 18),
+                tooltip: 'Önceki',
+                onPressed: _matchCount == 0 ? null : _previousMatch,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+              ),
+              IconButton(
+                icon: const Icon(Icons.keyboard_arrow_down, size: 18),
+                tooltip: 'Sonraki',
+                onPressed: _matchCount == 0 ? null : _nextMatch,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+              ),
+              const SizedBox(width: 8),
+              Container(width: 1, height: 20, color: scheme.outlineVariant),
+              const SizedBox(width: 8),
+              // Değiştir kutusu
+              SizedBox(
+                width: 160,
+                height: 32,
+                child: TextField(
+                  controller: _replace,
+                  style: const TextStyle(fontSize: 13),
+                  decoration: InputDecoration(
+                    isDense: true,
+                    hintText: 'Değiştir...',
+                    prefixIcon: const Icon(Icons.edit_note, size: 16),
+                    prefixIconConstraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                    contentPadding: const EdgeInsets.symmetric(vertical: 0),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 4),
+              IconButton(
+                icon: const Icon(Icons.find_replace, size: 16),
+                tooltip: 'Tümünü Değiştir',
+                onPressed: () {
+                  if (_searchQuery.isNotEmpty) {
+                    if (_showText) {
+                      final newText = _text.text.replaceAll(RegExp(RegExp.escape(_searchQuery), caseSensitive: false), _replace.text);
+                      cubit.setActiveContent(newText, immediate: true);
+                    } else if (cubit.state.parsed != null) {
+                      final replaced = _replaceAll(cubit.state.parsed, _searchQuery, _replace.text);
+                      final formatted = const JsonEncoder.withIndent('  ').convert(replaced);
+                      cubit.setActiveContent(formatted, immediate: true);
+                    }
+                    context.showSnack('Bulunanlar değiştirildi.');
+                  }
+                },
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+              ),
+            ],
+            const SizedBox(width: 8),
+            Container(width: 1, height: 20, color: scheme.outlineVariant),
+            const SizedBox(width: 4),
+            IconButton(
+              icon: const Icon(Icons.close, size: 18),
+              tooltip: 'Kapat',
+              onPressed: _closeSearch,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+            ),
+          ],
         ),
-        if (_searchQuery.isNotEmpty) ...[
-          const SizedBox(width: 6),
-          Text(
-            _matchCount == 0 ? '0/0' : '${_matchIndex + 1}/$_matchCount',
-            style: TextStyle(fontSize: 11.5, color: scheme.onSurfaceVariant),
-          ),
-          IconButton(
-            icon: const Icon(Icons.keyboard_arrow_up, size: 18),
-            tooltip: 'Önceki eşleşme',
-            onPressed: _matchCount == 0
-                ? null
-                : () => _treeKey.currentState?.previousMatch(),
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
-          ),
-          IconButton(
-            icon: const Icon(Icons.keyboard_arrow_down, size: 18),
-            tooltip: 'Sonraki eşleşme',
-            onPressed: _matchCount == 0
-                ? null
-                : () => _treeKey.currentState?.nextMatch(),
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
-          ),
-        ],
-      ],
+      ),
     );
   }
 
@@ -290,7 +546,7 @@ class _ViewerPageState extends State<ViewerPage> with ActiveDocumentEditor {
           child: Text(
             state.jsonError != null
                 ? 'Geçerli bir JSON girin (yukarıdaki hataya bakın).'
-                : 'JSON yapıştırın veya "Örnek" düğmesine basın.',
+                : 'JSON yapıştırın veya "Yapıştır" düğmesine basın.',
             textAlign: TextAlign.center,
             style: TextStyle(
               color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -306,7 +562,7 @@ class _ViewerPageState extends State<ViewerPage> with ActiveDocumentEditor {
           flex: 3,
           child: PaneCard(
             title: 'Ağaç',
-            actions: [_buildSearchBar()],
+            actions: [],
             child: JsonTreeView(
               key: _treeKey,
               root: state.parsed,
@@ -369,87 +625,29 @@ class _DetailPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     if (path == null) {
       return Center(
         child: Text(
-          'Ağaçtan bir düğüm seçin.',
-          style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13),
+          'Düğüm seçilmedi.',
+          style: TextStyle(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
         ),
       );
     }
-
-    final entries = <MapEntry<String, dynamic>>[];
-    if (value is Map) {
-      (value as Map).forEach((k, v) => entries.add(MapEntry(k.toString(), v)));
-    } else if (value is List) {
-      final list = value as List;
-      for (var i = 0; i < list.length; i++) {
-        entries.add(MapEntry('[$i]', list[i]));
-      }
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(10, 8, 10, 4),
-          child: SelectableText(
-            path!,
-            style: codeTextStyle.copyWith(
-              fontSize: 11.5,
-              color: scheme.onSurfaceVariant,
-            ),
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SelectableText(
+            'Yol: $path',
+            style: const TextStyle(fontWeight: FontWeight.bold),
           ),
-        ),
-        const Divider(height: 1),
-        Expanded(
-          child: entries.isEmpty
-              ? Padding(
-                  padding: const EdgeInsets.all(10),
-                  child: SelectableText(_preview(value), style: codeTextStyle),
-                )
-              : ListView.separated(
-                  padding: const EdgeInsets.symmetric(vertical: 4),
-                  itemCount: entries.length,
-                  separatorBuilder: (_, _) => const Divider(height: 1),
-                  itemBuilder: (context, index) {
-                    final e = entries[index];
-                    return Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 4,
-                      ),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          SizedBox(
-                            width: 120,
-                            child: Text(
-                              e.key,
-                              style: codeTextStyle.copyWith(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              _preview(e.value),
-                              style: codeTextStyle.copyWith(fontSize: 12),
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-        ),
-      ],
+          const SizedBox(height: 12),
+          SelectableText(_preview(value)),
+        ],
+      ),
     );
   }
 }
