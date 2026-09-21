@@ -34,39 +34,32 @@ mobilde) çalışır.
 - Biçimlendir (girintile) · Boşlukları sil (minify) · Yapıştır · Temizle.
 - Metin ve Ağaç modları arası geçiş. Ağaçtan → dönüştürücüye tek tıkla aktarım.
 
-## Sürüm yönetimi (FVM)
+## Flutter sürümü
 
-Bu proje **FVM** ile belirli bir Flutter sürümüne sabitlenmiştir — `.fvmrc`:
-**Flutter 3.44.6 / Dart 3.12.2**. Böylece makinendeki global Flutter'a ve diğer
-projelerine dokunmadan bu projede en güncel sürüm kullanılır. Komutları `flutter`
-yerine **`fvm flutter`** ile çalıştır.
+Bu proje **Flutter 3.47.5 / Dart 3.12+** ile geliştiriliyor; alt sınır
+`pubspec.yaml`'daki `environment` bölümünde tanımlı. Proje daha önce FVM ile
+sabitlenmişti, artık makinedeki global Flutter kullanılıyor.
 
 ```bash
-# FVM kurulu değilse: dart pub global activate fvm
-fvm install            # .fvmrc'deki sürümü (3.44.6) indirir
-fvm flutter pub get
+flutter pub get
 ```
-
-> IDE'de: VS Code otomatik ayarlanır (`.vscode/settings.json` → `.fvm/versions/3.44.4`).
-> Android Studio'da Settings → Languages & Frameworks → Flutter → Flutter SDK path'i
-> proje kökündeki `.fvm/versions/3.44.4` (mutlak yol) olarak ayarla.
 
 ## Çalıştırma
 
 ```bash
 # Masaüstü
-fvm flutter run -d windows      # Windows
-fvm flutter run -d macos        # macOS
+flutter run -d windows      # Windows
+flutter run -d macos        # macOS
 
 # Web (isteğe bağlı)
-fvm flutter run -d chrome
+flutter run -d chrome
 ```
 
 ## Dağıtılabilir sürüm (release)
 
 ```bash
-fvm flutter build windows   # build/windows/x64/runner/Release/json2dart_studio.exe
-fvm flutter build macos     # build/macos/Build/Products/Release/json2dart_studio.app
+flutter build windows   # build/windows/x64/runner/Release/json2dart_studio.exe
+flutter build macos     # build/macos/Build/Products/Release/json2dart_studio.app
 ```
 
 > macOS'ta ilk derleme için Xcode ve CocoaPods gerekir. Windows için Visual Studio
@@ -77,7 +70,7 @@ fvm flutter build macos     # build/macos/Build/Products/Release/json2dart_studi
 UI olmadan, boru hattı içinde de üretebilirsiniz:
 
 ```bash
-fvm dart run tool/generate.dart tool/samples/transit.json --root=RoutePlan --style=freezed
+dart run tool/generate.dart tool/samples/transit.json --root=RoutePlan --style=freezed
 ```
 
 Bayraklar: `--root=` `--style=manual|jsonSerializable|freezed`

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../common/json_preview.dart';
 import '../common/widgets.dart';
+import 'json_search.dart';
 
 /// Ağaçtaki düğüm renkleri.
 class _TreeColors {
@@ -147,7 +148,7 @@ class JsonTreeViewState extends State<JsonTreeView> {
   /// Verilen sorguyla tüm ağacı tarar, eşleşen düğümlerin atalarını açar
   /// ve eşleşme listesini/güncel eşleşmeyi günceller.
   void _recomputeSearch() {
-    final query = widget.searchQuery.trim().toLowerCase();
+    final query = normalizeTreeQuery(widget.searchQuery).toLowerCase();
     final matches = <String>[];
     if (query.isNotEmpty) {
       final ancestorStack = <String>[];

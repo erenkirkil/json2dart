@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'src/common/app_themes.dart';
 import 'src/converter/converter_page.dart';
+import 'src/documents/active_document_editor.dart';
 import 'src/documents/documents_panel.dart';
 import 'src/documents/tab_bar_strip.dart';
 import 'src/documents/workspace_cubit.dart';
@@ -50,6 +52,48 @@ class _Json2DartAppState extends State<Json2DartApp> {
   }
 }
 
+/// Aktif belge içeriğini geri alma niyeti (Cmd/Ctrl+Z).
+class UndoContentIntent extends Intent {
+  const UndoContentIntent();
+}
+
+/// Aktif belge içeriğini ileri alma niyeti (Cmd/Ctrl+Shift+Z, Ctrl+Y).
+class RedoContentIntent extends Intent {
+  const RedoContentIntent();
+}
+
+/// Belge geçmişi kısayol eylemi. Odak, [DocumentEditorScope] dışındaki bir
+/// metin alanındayken (arama/değiştir kutusu, ayar alanları) devre dışı kalır:
+/// kısayol tüketilmez, olay kökteki DefaultTextEditingShortcuts'a kabarcıklanır
+/// ve alanın kendi yerleşik geri-al'ı çalışmaya devam eder.
+class _HistoryShortcutAction<T extends Intent> extends Action<T> {
+  _HistoryShortcutAction(this._action);
+
+  final VoidCallback _action;
+
+  @override
+  bool isEnabled(T intent) {
+    final focusContext = primaryFocus?.context;
+    if (focusContext == null) return true;
+    final editable = focusContext.findAncestorStateOfType<EditableTextState>();
+    // Metin alanında değilse (ağaç, düğme) belge geçmişi çalışsın. Salt-okunur
+    // alanlarda (Dart çıktısı, "Seçili Düğüm" panelindeki SelectableText'ler)
+    // da öyle: oraya kullanıcı bir şey yazmadığı için yerleşik geri-al yalnızca
+    // eski bir seçimi geri getirir; kullanıcının Cmd+Z ile kastettiği şey
+    // belge geçmişidir. Yol yalnızca kullanıcının o an yazmakta olduğu
+    // yardımcı alanlara (arama/değiştir kutusu) verilir.
+    if (editable == null || editable.widget.readOnly) return true;
+    return focusContext.getInheritedWidgetOfExactType<DocumentEditorScope>() !=
+        null;
+  }
+
+  @override
+  Object? invoke(T intent) {
+    _action();
+    return null;
+  }
+}
+
 class AppShell extends StatefulWidget {
   const AppShell({
     super.key,
@@ -71,6 +115,44 @@ class _AppShellState extends State<AppShell> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    // Geri al / ileri al kısayolları burada (kökteki
+    // DefaultTextEditingShortcuts'tan odağa daha yakın) tanımlanır: böylece
+    // Cmd/Ctrl+Z, editör TextField'ının kendi -belge geçmişiyle senkron
+    // olmayan- yerleşik undo yığını yerine her zaman belge geçmişine gider.
+    return Shortcuts(
+      shortcuts: const <ShortcutActivator, Intent>{
+        SingleActivator(LogicalKeyboardKey.keyZ, meta: true):
+            UndoContentIntent(),
+        SingleActivator(LogicalKeyboardKey.keyZ, control: true):
+            UndoContentIntent(),
+        SingleActivator(LogicalKeyboardKey.keyZ, meta: true, shift: true):
+            RedoContentIntent(),
+        SingleActivator(LogicalKeyboardKey.keyZ, control: true, shift: true):
+            RedoContentIntent(),
+        SingleActivator(LogicalKeyboardKey.keyY, control: true):
+            RedoContentIntent(),
+      },
+      child: Actions(
+        actions: <Type, Action<Intent>>{
+          UndoContentIntent: _HistoryShortcutAction<UndoContentIntent>(
+            () => context.read<WorkspaceCubit>().undo(),
+          ),
+          RedoContentIntent: _HistoryShortcutAction<RedoContentIntent>(
+            () => context.read<WorkspaceCubit>().redo(),
+          ),
+        },
+        // Odak kabuk içinde başlasın ve odaklı öğe kaldırıldığında (örn.
+        // arama çubuğu kapanınca) rota scope'una değil buraya düşsün; aksi
+        // hâlde kısayol dağıtım zincirinin dışında kalır.
+        child: FocusScope(
+          autofocus: true,
+          child: _buildShell(scheme),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildShell(ColorScheme scheme) {
     return Scaffold(
       body: Row(
         children: [
@@ -162,6 +244,7 @@ class _AppShellState extends State<AppShell> {
                         onOpenInViewer: () => setState(() => _tabIndex = 1),
                       ),
                       ViewerPage(
+                        isActive: _tabIndex == 1,
                         onConvert: () => setState(() => _tabIndex = 0),
                       ),
                     ],

@@ -13,6 +13,7 @@ import '../common/json_syntax_controller.dart';
 import '../common/widgets.dart';
 import '../documents/active_document_editor.dart';
 import '../documents/workspace_cubit.dart';
+import 'json_search.dart';
 import 'json_tree_view.dart';
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
@@ -27,10 +28,20 @@ class CloseSearchIntent extends Intent {
 
 /// JSON görüntüleyici / biçimlendirici ekranı (aktif belge üzerinde çalışır).
 class ViewerPage extends StatefulWidget {
-  const ViewerPage({super.key, required this.onConvert});
+  const ViewerPage({
+    super.key,
+    required this.onConvert,
+    this.isActive = true,
+  });
 
   /// Dönüştürücü sekmesine geçiş (içerik paylaşımlı).
   final VoidCallback onConvert;
+
+  /// Bu sayfa görünür sekme mi. IndexedStack gizli çocuklarını ExcludeFocus
+  /// ile sardığı için initState'teki autofocus isteği sessizce düşer ve bir
+  /// daha denenmez; sekme görünür olunca odak açıkça istenir, aksi hâlde
+  /// Cmd/Ctrl+F kullanıcı pane'e tıklayana kadar çalışmaz.
+  final bool isActive;
 
   @override
   State<ViewerPage> createState() => _ViewerPageState();
@@ -42,6 +53,7 @@ class _ViewerPageState extends State<ViewerPage> with ActiveDocumentEditor {
   final TextEditingController _search = TextEditingController();
   final TextEditingController _replace = TextEditingController();
   final FocusNode _searchFocus = FocusNode();
+  final FocusNode _pageFocus = FocusNode(debugLabel: 'ViewerPage');
   Timer? _searchDebounce;
 
   bool _showText = false;
@@ -61,7 +73,15 @@ class _ViewerPageState extends State<ViewerPage> with ActiveDocumentEditor {
   @override
   void initState() {
     super.initState();
-    _text.text = cubit.state.activeContent;
+    initEditorContent();
+  }
+
+  @override
+  void didUpdateWidget(ViewerPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isActive && !oldWidget.isActive) {
+      _pageFocus.requestFocus();
+    }
   }
 
   @override
@@ -70,6 +90,7 @@ class _ViewerPageState extends State<ViewerPage> with ActiveDocumentEditor {
     _search.dispose();
     _replace.dispose();
     _searchFocus.dispose();
+    _pageFocus.dispose();
     _searchDebounce?.cancel();
     super.dispose();
   }
@@ -210,55 +231,54 @@ class _ViewerPageState extends State<ViewerPage> with ActiveDocumentEditor {
 
   /// Aramadaki eşleşmeleri, kullanıcı onayladıktan sonra topluca değiştirir.
   Future<void> _replaceAllAction() async {
-    if (_searchQuery.isEmpty) return;
+    // Ağaç modunda sorgu, aramanın kullandığı normalleştirmenin aynısından
+    // geçer (normalizeTreeQuery); metin modunda ham metin aranır, boşluk
+    // anlamlı olduğu için trim edilmez.
+    final query = _showText ? _searchQuery : normalizeTreeQuery(_searchQuery);
+    if (query.isEmpty) return;
     final target = _replace.text;
     final ok = await context.confirm(
       title: 'Tümünü Değiştir',
       message: _showText
-          ? '$_matchCount eşleşme "$_searchQuery" → "$target" olarak '
+          ? '$_matchCount eşleşme "$query" → "$target" olarak '
                 'değiştirilecek. Bu, metni geçersiz JSON hâline getirebilir. '
                 'Devam edilsin mi? ("Geri Al" ile döndürebilirsiniz.)'
-          : '"$_searchQuery" ifadesi ağaçtaki anahtarlarda ve metin '
+          : '"$query" ifadesi ağaçtaki anahtarlarda ve metin '
                 'değerlerinde (büyük/küçük harf duyarsız) "$target" ile '
                 'değiştirilecek. Devam edilsin mi? '
                 '("Geri Al" ile döndürebilirsiniz.)',
       confirmLabel: 'Değiştir',
     );
     if (!mounted || !ok) return;
+    final pattern = RegExp(RegExp.escape(query), caseSensitive: false);
+    var changedAny = false;
     if (_showText) {
-      final newText = _text.text.replaceAll(
-        RegExp(RegExp.escape(_searchQuery), caseSensitive: false),
+      final newText = _text.text.replaceAll(pattern, target);
+      changedAny = newText != _text.text;
+      if (changedAny) cubit.setActiveContent(newText, immediate: true);
+    } else if (cubit.state.parsed != null) {
+      final (replaced, changed) = replaceAllInJson(
+        cubit.state.parsed,
+        pattern,
         target,
       );
-      cubit.setActiveContent(newText, immediate: true);
-    } else if (cubit.state.parsed != null) {
-      final replaced = _replaceAll(cubit.state.parsed, _searchQuery, target);
-      final formatted = const JsonEncoder.withIndent('  ').convert(replaced);
-      cubit.setActiveContent(formatted, immediate: true);
+      changedAny = changed > 0;
+      if (changedAny) {
+        final formatted = const JsonEncoder.withIndent('  ').convert(replaced);
+        cubit.setActiveContent(formatted, immediate: true);
+      }
+    }
+    // Hiçbir şey değişmediyse içeriğe dokunma: yanıltıcı başarı mesajı ve
+    // salt-biçimlendirmeden ibaret bir geri-al adımı oluşmasın.
+    if (!changedAny) {
+      context.showSnack('Değiştirme sonucu içerik değişmedi.');
+      return;
     }
     context.showSnack('Değiştirme uygulandı.');
     // İçerik değiştiği için eşleşme sayacı/işaretlemeleri tazele (bayat kalmasın).
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _performSearch();
     });
-  }
-
-  dynamic _replaceAll(dynamic obj, String query, String replacement) {
-    final pattern = RegExp(RegExp.escape(query), caseSensitive: false);
-    if (obj is Map) {
-      final newMap = <String, dynamic>{};
-      for (final entry in obj.entries) {
-        final newKey = entry.key.toString().replaceAll(pattern, replacement);
-        newMap[newKey] = _replaceAll(entry.value, query, replacement);
-      }
-      return newMap;
-    } else if (obj is List) {
-      return obj.map((e) => _replaceAll(e, query, replacement)).toList();
-    } else if (obj is String) {
-      return obj.replaceAll(pattern, replacement);
-    } else {
-      return obj;
-    }
   }
 
   @override
@@ -290,6 +310,7 @@ class _ViewerPageState extends State<ViewerPage> with ActiveDocumentEditor {
           ),
         },
         child: Focus(
+          focusNode: _pageFocus,
           autofocus: true,
           child: Stack(
             children: [
@@ -458,11 +479,13 @@ class _ViewerPageState extends State<ViewerPage> with ActiveDocumentEditor {
   Widget _buildTextTab(WorkspaceState state) {
     return PaneCard(
       title: 'Metin',
-      child: LineNumberedField(
-        controller: _text,
-        errorLine: state.jsonErrorLine,
-        hintText: 'JSON\'u buraya yapıştırın...',
-        onChanged: (t) => cubit.setActiveContent(t),
+      child: DocumentEditorScope(
+        child: LineNumberedField(
+          controller: _text,
+          errorLine: state.jsonErrorLine,
+          hintText: 'JSON\'u buraya yapıştırın...',
+          onChanged: (t) => cubit.setActiveContent(t),
+        ),
       ),
     );
   }

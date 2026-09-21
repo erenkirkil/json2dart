@@ -108,7 +108,10 @@ class _SettingsPanelState extends State<SettingsPanel> {
         onChanged: (v) => _update(s.copyWithSettings(rootClassName: v)),
       ),
       const SizedBox(height: 12),
+      // Ayarlar paneli sabit genişlikte; isExpanded olmadan dropdown en geniş
+      // öğenin doğal genişliğine büyüyüp kutusunu taşırıyor (içerik kırpılır).
       DropdownButtonFormField<SerializerStyle>(
+        isExpanded: true,
         key: ValueKey('style-${s.style.name}'),
         initialValue: s.style,
         decoration: const InputDecoration(
@@ -138,6 +141,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
       ),
       const SizedBox(height: 12),
       DropdownButtonFormField<NullabilityMode>(
+        isExpanded: true,
         key: ValueKey('null-${s.nullability.name}'),
         initialValue: s.nullability,
         decoration: const InputDecoration(

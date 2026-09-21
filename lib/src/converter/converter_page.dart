@@ -36,7 +36,7 @@ class _ConverterPageState extends State<ConverterPage>
   @override
   void initState() {
     super.initState();
-    _input.text = cubit.state.activeContent;
+    initEditorContent();
   }
 
   @override
@@ -156,11 +156,13 @@ class _ConverterPageState extends State<ConverterPage>
                     child: Column(
                       children: [
                         Expanded(
-                          child: LineNumberedField(
-                            controller: _input,
-                            errorLine: state.jsonErrorLine,
-                            hintText: 'JSON\'u buraya yapıştırın...',
-                            onChanged: (t) => cubit.setActiveContent(t),
+                          child: DocumentEditorScope(
+                            child: LineNumberedField(
+                              controller: _input,
+                              errorLine: state.jsonErrorLine,
+                              hintText: 'JSON\'u buraya yapıştırın...',
+                              onChanged: (t) => cubit.setActiveContent(t),
+                            ),
                           ),
                         ),
                         if (state.jsonError != null)

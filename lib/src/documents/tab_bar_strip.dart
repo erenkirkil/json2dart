@@ -120,16 +120,28 @@ class _TabState extends State<_Tab> {
               ),
             ),
             const SizedBox(width: 4),
-            InkWell(
-              onTap: widget.onClose,
-              onHover: (val) => setState(() => _hoverClose = val),
-              borderRadius: BorderRadius.circular(4),
-              child: Padding(
-                padding: const EdgeInsets.all(3),
-                child: Icon(
-                  Icons.close,
-                  size: 14,
-                  color: _hoverClose ? scheme.error : scheme.onSurfaceVariant,
+            Tooltip(
+              message: 'Kapat',
+              waitDuration: const Duration(milliseconds: 400),
+              child: InkWell(
+                onTap: widget.onClose,
+                onHover: (val) => setState(() => _hoverClose = val),
+                borderRadius: BorderRadius.circular(4),
+                child: Container(
+                  padding: const EdgeInsets.all(5),
+                  decoration: BoxDecoration(
+                    // Sekmenin opak zemini ink katmanını örttüğünden hover
+                    // vurgusu ink yerine doğrudan konteyner rengiyle çizilir.
+                    color: _hoverClose
+                        ? scheme.error.withValues(alpha: 0.12)
+                        : Colors.transparent,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Icon(
+                    Icons.close,
+                    size: 14,
+                    color: _hoverClose ? scheme.error : scheme.onSurfaceVariant,
+                  ),
                 ),
               ),
             ),
